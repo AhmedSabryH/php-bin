@@ -140,13 +140,39 @@ jobs:
           echo "=== lock file ==="
           cat downloads/.lock.json
 
+      - name: Debug - verify spc.exe exists
+        shell: pwsh
+        run: |
+          $spc = "${{ github.workspace }}/../static-php-cli/bin/spc.exe"
+          Write-Host "Looking for: $spc"
+          if (Test-Path $spc) {
+            Write-Host "✅ spc.exe found"
+            Get-Item $spc | Select-Object FullName, Length
+          } else {
+            Write-Host "❌ spc.exe NOT found"
+            Write-Host "Listing ${{ github.workspace }}/../static-php-cli :"
+            Get-ChildItem "${{ github.workspace }}/../static-php-cli" -Force -ErrorAction SilentlyContinue | Select-Object Name
+            Write-Host "Listing ${{ github.workspace }}/../static-php-cli/bin :"
+            Get-ChildItem "${{ github.workspace }}/../static-php-cli/bin" -Force -ErrorAction SilentlyContinue | Select-Object Name
+          }
+
       - name: Download PHP extension sources
         if: steps.cache-spc-downloads.outputs.cache-hit != 'true'
+        shell: pwsh
         env:
           SPC_IGNORE_BAD_HASH: "true"
         run: |
-          cd ../static-php-cli
-          ./bin/spc.exe download --with-php=${{ matrix.version }} --for-extensions "${{ env.PHP_EXTENSIONS }}" --prefer-pre-built
+          $spcDir = "${{ github.workspace }}/../static-php-cli"
+          $spc = "$spcDir/bin/spc.exe"
+          
+          if (-not (Test-Path $spc)) {
+            Write-Host "FATAL: spc.exe not found at $spc"
+            exit 1
+          }
+          
+          Set-Location $spcDir
+          Write-Host "Working dir: $(Get-Location)"
+          & $spc download --with-php=${{ matrix.version }} --for-extensions "${{ env.PHP_EXTENSIONS }}" --prefer-pre-built
       # SPC 2.8.5 has no Windows zstd builder, but PHP ext/curl/config.w32
       # requires libzstd.lib. Stage a pre-built copy into buildroot so the
       # curl extension's config check passes.
@@ -168,22 +194,32 @@ jobs:
       # manually and patch in /std:c++17 before SPC runs the build.
       - name: Patch PHP 8.3 ext/intl for C++17 (ICU 78 compatibility)
         if: matrix.version == '8.3'
+        shell: pwsh
         run: |
-          cd ../static-php-cli
-          php bin/spc extract php-src
+          $spcDir = "${{ github.workspace }}/../static-php-cli"
+          $spc = "$spcDir/bin/spc.exe"
+          Set-Location $spcDir
+          & $spc extract php-src
           $f = 'source/php-src/ext/intl/config.w32'
           (Get-Content -Path $f -Raw) -replace '"/EHsc /DUNISTR_FROM_CHAR_EXPLICIT', '"/std:c++17 /EHsc /DUNISTR_FROM_CHAR_EXPLICIT' | Set-Content -Path $f -NoNewline
+          
       - name: Debug - verify beast is recognized
+        shell: pwsh
         run: |
-          cd ../static-php-cli
-          ./bin/spc.exe dump-extensions 2>&1 | findstr beast || echo "beast not in dump"
+          $spcDir = "${{ github.workspace }}/../static-php-cli"
+          $spc = "$spcDir/bin/spc.exe"
+          Set-Location $spcDir
+          & $spc dump-extensions 2>&1 | Select-String beast
           
       - name: Build PHP
+        shell: pwsh
         env:
           SPC_IGNORE_BAD_HASH: "true"
         run: |
-          cd ../static-php-cli
-          ./bin/spc.exe build --build-cli "${{ env.PHP_EXTENSIONS }}" --with-libs="${{ env.PHP_LIBS }}" --debug
+          $spcDir = "${{ github.workspace }}/../static-php-cli"
+          $spc = "$spcDir/bin/spc.exe"
+          Set-Location $spcDir
+          & $spc build --build-cli "${{ env.PHP_EXTENSIONS }}" --with-libs="${{ env.PHP_LIBS }}" --debug
 
       - name: Get built PHP version
         run: |
