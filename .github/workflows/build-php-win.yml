@@ -49,13 +49,36 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Download SPC
+      - name: Setup SPC from source
         run: |
           cd ..
-          Invoke-WebRequest -Uri "https://github.com/crazywhalecc/static-php-cli/releases/download/${{ env.SPC_VERSION }}/${{ matrix.spc_asset }}" -OutFile spc.exe
-          New-Item -ItemType Directory -Force -Path static-php-cli/bin | Out-Null
-          Move-Item spc.exe static-php-cli/bin/
+          git clone --branch ${{ env.SPC_VERSION }} --depth 1 https://github.com/crazywhalecc/static-php-cli.git
+          cd static-php-cli
+          composer install --no-dev --no-interaction --ignore-platform-reqs
 
+      - name: Inject beast configuration into SPC
+        run: |
+          $extJsonPath = '../static-php-cli/config/ext.json'
+          $sourceJsonPath = '../static-php-cli/config/source.json'
+          
+          # Merge beast into ext.json
+          $extJson = Get-Content $extJsonPath -Raw | ConvertFrom-Json
+          $beastExt = (Get-Content 'build-meta/beast-ext.json' -Raw | ConvertFrom-Json).beast
+          $extJson | Add-Member -MemberType NoteProperty -Name 'beast' -Value $beastExt -Force
+          $extJson | ConvertTo-Json -Depth 20 | Set-Content $extJsonPath -Encoding UTF8
+          
+          # Merge beast into source.json
+          $sourceJson = Get-Content $sourceJsonPath -Raw | ConvertFrom-Json
+          $beastSource = (Get-Content 'build-meta/beast-source.json' -Raw | ConvertFrom-Json).beast
+          $sourceJson | Add-Member -MemberType NoteProperty -Name 'beast' -Value $beastSource -Force
+          $sourceJson | ConvertTo-Json -Depth 20 | Set-Content $sourceJsonPath -Encoding UTF8
+          
+          # Verify injection
+          Write-Host "=== beast in ext.json ==="
+          (Get-Content $extJsonPath -Raw | ConvertFrom-Json).beast
+          Write-Host "=== beast in source.json ==="
+          (Get-Content $sourceJsonPath -Raw | ConvertFrom-Json).beast
+          
       - name: Setup system PHP
         uses: shivammathur/setup-php@v2
         with:
@@ -67,7 +90,7 @@ jobs:
       - name: SPC doctor
         run: |
           cd ../static-php-cli
-          ./bin/spc.exe doctor
+          php bin/spc doctor
 
       - name: Read PHP extensions and libraries
         run: |
@@ -89,7 +112,7 @@ jobs:
         if: steps.cache-spc-downloads.outputs.cache-hit != 'true'
         run: |
           cd ../static-php-cli
-          ./bin/spc.exe download --with-php=${{ matrix.version }} --for-extensions "${{ env.PHP_EXTENSIONS }}" --prefer-pre-built
+          php bin/spc download --with-php=${{ matrix.version }} --for-extensions "${{ env.PHP_EXTENSIONS }}" --prefer-pre-built
 
       # SPC 2.8.5 has no Windows zstd builder, but PHP ext/curl/config.w32
       # requires libzstd.lib. Stage a pre-built copy into buildroot so the
@@ -114,14 +137,14 @@ jobs:
         if: matrix.version == '8.3'
         run: |
           cd ../static-php-cli
-          ./bin/spc.exe extract php-src
+          php bin/spc extract php-src
           $f = 'source/php-src/ext/intl/config.w32'
           (Get-Content -Path $f -Raw) -replace '"/EHsc /DUNISTR_FROM_CHAR_EXPLICIT', '"/std:c++17 /EHsc /DUNISTR_FROM_CHAR_EXPLICIT' | Set-Content -Path $f -NoNewline
 
       - name: Build PHP
         run: |
           cd ../static-php-cli
-          ./bin/spc.exe build --build-cli "${{ env.PHP_EXTENSIONS }}" --with-libs="${{ env.PHP_LIBS }}" --debug
+          php bin/spc build --build-cli "${{ env.PHP_EXTENSIONS }}" --with-libs="${{ env.PHP_LIBS }}" --debug
 
       - name: Get built PHP version
         run: |
@@ -144,6 +167,13 @@ jobs:
       # same `aws s3 cp` tooling, R2_* secrets, endpoint and --cache-control.
       # Runs under Git Bash (`shell: bash`) so the same script works as on
       # mac/linux; the windows-2025 runner ships both `aws` and `sha256sum`.
+      - name: Upload PHP zip as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: php-${{ matrix.version }}-win-x64
+          path: bin/win/x64/php-${{ matrix.version }}.zip
+          retention-days: 30
+          
       - name: Upload to R2
         shell: bash
         env:
