@@ -21,6 +21,7 @@ on:
 env:
   SPC_VERSION: 2.8.5
   SPC_BUILD_OS: win
+  PHP_SDK_PATH: ${{ github.workspace }}/../static-php-cli/php-sdk-binary-tools
   R2_PREFIX: ${{ format('{0}/', github.ref_name) }}
   R2_ENDPOINT: https://713f4e1d515cf082921cdf5122bf1739.r2.cloudflarestorage.com
   R2_BUCKET: nativephplibs
@@ -218,20 +219,50 @@ jobs:
           Copy-Item "zstd-${env:ZSTD_VERSION}-win64/include/*.h" "static-php-cli/buildroot/include/"
           Remove-Item -Recurse -Force zstd.zip, "zstd-${env:ZSTD_VERSION}-win64"
 
+      - name: Download php-sdk-binary-tools manually
+        working-directory: ${{ github.workspace }}/../static-php-cli
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/php/php-sdk-binary-tools/archive/refs/heads/master.zip" -OutFile sdk.zip
+          Expand-Archive -Path sdk.zip -DestinationPath .
+          if (Test-Path "php-sdk-binary-tools-master") {
+            Rename-Item "php-sdk-binary-tools-master" "php-sdk-binary-tools"
+          }
+          Remove-Item sdk.zip -Force
+          Write-Host "=== SDK installed ==="
+          Get-ChildItem "php-sdk-binary-tools/bin" | Select-Object Name | Select-Object -First 10
+
       - name: Patch PHP 8.3 ext/intl for C++17 (ICU 78 compatibility)
         if: matrix.version == '8.3'
         working-directory: ${{ github.workspace }}/../static-php-cli
+        shell: bash
         env:
+          PHP_SDK_PATH: ${{ github.workspace }}/../static-php-cli/php-sdk-binary-tools
           SPC_IGNORE_BAD_HASH: "true"
         run: |
-          php bin/spc extract php-src
-          $f = 'source/php-src/ext/intl/config.w32'
-          (Get-Content -Path $f -Raw) -replace '"/EHsc /DUNISTR_FROM_CHAR_EXPLICIT', '"/std:c++17 /EHsc /DUNISTR_FROM_CHAR_EXPLICIT' | Set-Content -Path $f -NoNewline
-
+          # Extract php-src manually using tar (Git Bash handles .tar.xz)
+          rm -rf source/php-src
+          mkdir -p source/php-src
+          tar --force-local -xf "downloads/php-8.3.33.tar.xz" -C source/php-src --strip-components 1
+          
+          # Verify extraction
+          if [ ! -f source/php-src/ext/intl/config.w32 ]; then
+            echo "ERROR: extraction failed"
+            ls -la source/php-src/ | head -20
+            exit 1
+          fi
+          
+          # Apply patch with sed
+          sed -i 's|"/EHsc /DUNISTR_FROM_CHAR_EXPLICIT|"/std:c++17 /EHsc /DUNISTR_FROM_CHAR_EXPLICIT|' source/php-src/ext/intl/config.w32
+          
+          echo "=== Patch verification ==="
+          grep -n 'std:c++17' source/php-src/ext/intl/config.w32 | head -3
+          
       - name: Build PHP
         working-directory: ${{ github.workspace }}/../static-php-cli
         env:
           SPC_IGNORE_BAD_HASH: "true"
+          PHP_SDK_PATH: ${{ github.workspace }}/../static-php-cli/php-sdk-binary-tools
         run: php bin/spc build --build-cli "${{ env.PHP_EXTENSIONS }}" --with-libs="${{ env.PHP_LIBS }}" --debug
 
       - name: Get built PHP version
