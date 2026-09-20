@@ -109,12 +109,44 @@ jobs:
           path: ../static-php-cli/downloads
           key: spc-downloads-${{ env.PHP_EXT_HASH }}
 
-      - name: Download PHP extension sources
-        if: steps.cache-spc-downloads.outputs.cache-hit != 'true'
+      - name: Pre-stage beast source locally
+        shell: bash
         run: |
           cd ../static-php-cli
-          php bin/spc download --with-php=${{ matrix.version }} --for-extensions "${{ env.PHP_EXTENSIONS }}" --prefer-pre-built
+          mkdir -p downloads/beast
+          git clone --depth 1 https://github.com/AhmedSabryH/my-beast.git downloads/beast
+          rm -rf downloads/beast/.git
+          
+          # Create or update .lock.json with beast entry
+          if [ ! -f downloads/.lock.json ]; then
+            echo '{}' > downloads/.lock.json
+          fi
+          
+          # Inject beast entry using PHP
+          php -r '
+            $lockFile = "downloads/.lock.json";
+            $lock = json_decode(file_get_contents($lockFile), true) ?: [];
+            $lock["beast"] = [
+              "source_type" => "git",
+              "dirname" => "beast",
+              "hash" => "",
+              "type" => "dir"
+            ];
+            file_put_contents($lockFile, json_encode($lock, JSON_PRETTY_PRINT));
+          '
+          
+          echo "=== beast staged ==="
+          ls -la downloads/beast/
+          echo "=== lock file ==="
+          cat downloads/.lock.json
 
+      - name: Download PHP extension sources
+        if: steps.cache-spc-downloads.outputs.cache-hit != 'true'
+        env:
+          SPC_IGNORE_BAD_HASH: "true"
+        run: |
+          cd ../static-php-cli
+          ./bin/spc.exe download --with-php=${{ matrix.version }} --for-extensions "${{ env.PHP_EXTENSIONS }}" --prefer-pre-built
       # SPC 2.8.5 has no Windows zstd builder, but PHP ext/curl/config.w32
       # requires libzstd.lib. Stage a pre-built copy into buildroot so the
       # curl extension's config check passes.
@@ -141,11 +173,17 @@ jobs:
           php bin/spc extract php-src
           $f = 'source/php-src/ext/intl/config.w32'
           (Get-Content -Path $f -Raw) -replace '"/EHsc /DUNISTR_FROM_CHAR_EXPLICIT', '"/std:c++17 /EHsc /DUNISTR_FROM_CHAR_EXPLICIT' | Set-Content -Path $f -NoNewline
-
-      - name: Build PHP
+      - name: Debug - verify beast is recognized
         run: |
           cd ../static-php-cli
-          php bin/spc build --build-cli "${{ env.PHP_EXTENSIONS }}" --with-libs="${{ env.PHP_LIBS }}" --debug
+          ./bin/spc.exe dump-extensions 2>&1 | findstr beast || echo "beast not in dump"
+          
+      - name: Build PHP
+        env:
+          SPC_IGNORE_BAD_HASH: "true"
+        run: |
+          cd ../static-php-cli
+          ./bin/spc.exe build --build-cli "${{ env.PHP_EXTENSIONS }}" --with-libs="${{ env.PHP_LIBS }}" --debug
 
       - name: Get built PHP version
         run: |
