@@ -57,6 +57,38 @@ jobs:
           cd static-php-cli
           composer install --no-dev --no-interaction --ignore-platform-reqs
 
+      - name: Inject beast configuration into SPC
+        working-directory: ${{ github.workspace }}/../static-php-cli
+        run: |
+          php -r "
+            \$extFile = 'config/ext.json';
+            \$ext = json_decode(file_get_contents(\$extFile), true);
+            if (\$ext === null) { echo 'ERROR: ext.json invalid JSON'; exit(1); }
+            \$ext['beast'] = [
+              'type' => 'external',
+              'source' => 'beast',
+              'arg-type' => 'enable',
+              'support' => ['Windows' => 'yes', 'Linux' => 'yes', 'Darwin' => 'yes']
+            ];
+            file_put_contents(\$extFile, json_encode(\$ext, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+            \$srcFile = 'config/source.json';
+            \$src = json_decode(file_get_contents(\$srcFile), true);
+            if (\$src === null) { echo 'ERROR: source.json invalid JSON'; exit(1); }
+            \$src['beast'] = [
+              'type' => 'git',
+              'url' => 'https://github.com/AhmedSabryH/my-beast.git',
+              'rev' => 'main',
+              'path' => 'beast'
+            ];
+            file_put_contents(\$srcFile, json_encode(\$src, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+            echo 'Beast injected successfully';
+          "
+          Write-Host "=== Verification ==="
+          php -r "echo isset(json_decode(file_get_contents('config/ext.json'), true)['beast']) ? 'ext.json: OK' : 'ext.json: MISSING';"
+          php -r "echo PHP_EOL . (isset(json_decode(file_get_contents('config/source.json'), true)['beast']) ? 'source.json: OK' : 'source.json: MISSING');"
+
       - name: Pre-stage beast source locally
         working-directory: ${{ github.workspace }}/../static-php-cli
         shell: bash
