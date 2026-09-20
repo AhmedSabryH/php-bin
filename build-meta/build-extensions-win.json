@@ -4,6 +4,7 @@
     "ctype",
     "zlib",
     "openssl",
+    "beast",
     "brotli",
     "curl",
     "iconv",
