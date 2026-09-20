@@ -258,37 +258,33 @@ jobs:
           echo "=== Patch verification ==="
           grep -n 'std:c++17' source/php-src/ext/intl/config.w32 | head -3
 
-      - name: Patch libiconv_win.php for VS detection
+      - name: Patch ALL SPC files for VS detection
         working-directory: ${{ github.workspace }}/../static-php-cli
         shell: bash
         run: |
-          FILE="src/SPC/builder/windows/library/libiconv_win.php"
+          echo "=== Files before patching ==="
+          grep -rl "SystemUtil::findVisualStudio()\['version'\]" src/ 2>/dev/null || echo "No files matched"
           
-          if [ ! -f "$FILE" ]; then
-            echo "ERROR: $FILE not found"
+          # Patch ALL .php files under src/ that use the VS detection pattern
+          find src/ -type f -name "*.php" -exec sed -i "s|SystemUtil::findVisualStudio()\['version'\]|'vs17'|g" {} \;
+          
+          echo ""
+          echo "=== Verification: any remaining matches? ==="
+          REMAINING=$(grep -rl "SystemUtil::findVisualStudio()\['version'\]" src/ 2>/dev/null | wc -l)
+          echo "Remaining files with old pattern: $REMAINING"
+          
+          if [ "$REMAINING" -gt 0 ]; then
+            echo "ERROR: Some files were not patched:"
+            grep -rl "SystemUtil::findVisualStudio()\['version'\]" src/ 2>/dev/null
             exit 1
           fi
           
-          echo "=== Original content around line 19 ==="
-          sed -n '15,25p' "$FILE"
+          echo "✅ All files patched successfully"
           
-          # Replace any call to SystemUtil::findVisualStudio()['version'] with 'vs17'
-          sed -i "s|SystemUtil::findVisualStudio()\['version'\]|'vs17'|g" "$FILE"
-          
+          # Show sample of patched content
           echo ""
-          echo "=== Patched content ==="
-          sed -n '15,25p' "$FILE"
-
-      - name: Patch WindowsBuilder.php for VS detection
-        working-directory: ${{ github.workspace }}/../static-php-cli
-        shell: bash
-        run: |
-          FILE="src/SPC/builder/windows/WindowsBuilder.php"
-          
-          if [ -f "$FILE" ]; then
-            sed -i "s|SystemUtil::findVisualStudio()\['version'\]|'vs17'|g" "$FILE"
-            echo "Patched $FILE"
-          fi
+          echo "=== Sample: libsodium.php ==="
+          sed -n '15,30p' src/SPC/builder/windows/library/libsodium.php 2>/dev/null || true
           
       - name: Build PHP
         working-directory: ${{ github.workspace }}/../static-php-cli
