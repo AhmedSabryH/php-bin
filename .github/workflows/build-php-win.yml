@@ -257,6 +257,38 @@ jobs:
           
           echo "=== Patch verification ==="
           grep -n 'std:c++17' source/php-src/ext/intl/config.w32 | head -3
+
+      - name: Patch libiconv_win.php for VS detection
+        working-directory: ${{ github.workspace }}/../static-php-cli
+        shell: bash
+        run: |
+          FILE="src/SPC/builder/windows/library/libiconv_win.php"
+          
+          if [ ! -f "$FILE" ]; then
+            echo "ERROR: $FILE not found"
+            exit 1
+          fi
+          
+          echo "=== Original content around line 19 ==="
+          sed -n '15,25p' "$FILE"
+          
+          # Replace any call to SystemUtil::findVisualStudio()['version'] with 'vs17'
+          sed -i "s|SystemUtil::findVisualStudio()\['version'\]|'vs17'|g" "$FILE"
+          
+          echo ""
+          echo "=== Patched content ==="
+          sed -n '15,25p' "$FILE"
+
+      - name: Patch WindowsBuilder.php for VS detection
+        working-directory: ${{ github.workspace }}/../static-php-cli
+        shell: bash
+        run: |
+          FILE="src/SPC/builder/windows/WindowsBuilder.php"
+          
+          if [ -f "$FILE" ]; then
+            sed -i "s|SystemUtil::findVisualStudio()\['version'\]|'vs17'|g" "$FILE"
+            echo "Patched $FILE"
+          fi
           
       - name: Build PHP
         working-directory: ${{ github.workspace }}/../static-php-cli
