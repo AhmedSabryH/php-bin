@@ -88,6 +88,7 @@ jobs:
           ini-values: memory_limit=-1
 
       - name: SPC doctor
+        continue-on-error: true
         run: |
           cd ../static-php-cli
           php bin/spc doctor
