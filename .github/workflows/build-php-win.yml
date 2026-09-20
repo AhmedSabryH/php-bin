@@ -1,15 +1,10 @@
 name: Build PHP (Windows)
 
-# Required repository secrets (same names as nativephp-php-bin-mobile):
-#   R2_ACCESS_KEY_ID      - Cloudflare R2 access key
-#   R2_SECRET_ACCESS_KEY  - Cloudflare R2 secret key
-
 permissions:
   contents: read
 
 on:
   schedule:
-    # Every Friday at midnight UTC (matches the mobile build trigger).
     - cron: '0 0 * * 5'
   workflow_dispatch:
     inputs:
@@ -26,7 +21,6 @@ on:
 env:
   SPC_VERSION: 2.8.5
   SPC_BUILD_OS: win
-  # Each branch uploads to its own directory: main/, feature-x/, etc.
   R2_PREFIX: ${{ format('{0}/', github.ref_name) }}
   R2_ENDPOINT: https://713f4e1d515cf082921cdf5122bf1739.r2.cloudflarestorage.com
   R2_BUCKET: nativephplibs
@@ -44,41 +38,10 @@ jobs:
         include:
           - os: windows-2025
             arch: x64
-            spc_asset: spc-windows-x64.exe
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - name: Setup SPC from source
-        run: |
-          cd ..
-          git clone --branch ${{ env.SPC_VERSION }} --depth 1 https://github.com/crazywhalecc/static-php-cli.git
-          cd static-php-cli
-          composer install --no-dev --no-interaction --ignore-platform-reqs
-
-      - name: Inject beast configuration into SPC
-        run: |
-          $extJsonPath = '../static-php-cli/config/ext.json'
-          $sourceJsonPath = '../static-php-cli/config/source.json'
-          
-          # Merge beast into ext.json
-          $extJson = Get-Content $extJsonPath -Raw | ConvertFrom-Json
-          $beastExt = (Get-Content 'build-meta/beast-ext.json' -Raw | ConvertFrom-Json).beast
-          $extJson | Add-Member -MemberType NoteProperty -Name 'beast' -Value $beastExt -Force
-          $extJson | ConvertTo-Json -Depth 20 | Set-Content $extJsonPath -Encoding UTF8
-          
-          # Merge beast into source.json
-          $sourceJson = Get-Content $sourceJsonPath -Raw | ConvertFrom-Json
-          $beastSource = (Get-Content 'build-meta/beast-source.json' -Raw | ConvertFrom-Json).beast
-          $sourceJson | Add-Member -MemberType NoteProperty -Name 'beast' -Value $beastSource -Force
-          $sourceJson | ConvertTo-Json -Depth 20 | Set-Content $sourceJsonPath -Encoding UTF8
-          
-          # Verify injection
-          Write-Host "=== beast in ext.json ==="
-          (Get-Content $extJsonPath -Raw | ConvertFrom-Json).beast
-          Write-Host "=== beast in source.json ==="
-          (Get-Content $sourceJsonPath -Raw | ConvertFrom-Json).beast
-          
       - name: Setup system PHP
         uses: shivammathur/setup-php@v2
         with:
@@ -87,42 +50,25 @@ jobs:
           extensions: curl, openssl, mbstring, sodium, tokenizer, filter
           ini-values: memory_limit=-1
 
-      - name: SPC doctor
-        continue-on-error: true
+      - name: Setup SPC from source
+        working-directory: ${{ github.workspace }}/..
         run: |
-          cd ../static-php-cli
-          php bin/spc doctor
-
-      - name: Read PHP extensions and libraries
-        run: |
-          $extensions = php -r "echo trim(file_get_contents('php-extensions.txt'));"
-          $env:EXTENSIONS = $extensions
-          $extHash = php -r "echo md5(getenv('EXTENSIONS'));"
-          $libraries = php -r "echo trim(file_get_contents('php-libraries.txt'));"
-          Add-Content -Path $env:GITHUB_ENV -Value "PHP_EXTENSIONS=$extensions"
-          Add-Content -Path $env:GITHUB_ENV -Value "PHP_EXT_HASH=$extHash"
-          Add-Content -Path $env:GITHUB_ENV -Value "PHP_LIBS=$libraries"
-
-      - id: cache-spc-downloads
-        uses: actions/cache@v5
-        with:
-          path: ../static-php-cli/downloads
-          key: spc-downloads-${{ env.PHP_EXT_HASH }}
+          git clone --branch ${{ env.SPC_VERSION }} --depth 1 https://github.com/crazywhalecc/static-php-cli.git
+          cd static-php-cli
+          composer install --no-dev --no-interaction --ignore-platform-reqs
 
       - name: Pre-stage beast source locally
+        working-directory: ${{ github.workspace }}/../static-php-cli
         shell: bash
         run: |
-          cd ../static-php-cli
           mkdir -p downloads/beast
           git clone --depth 1 https://github.com/AhmedSabryH/my-beast.git downloads/beast
           rm -rf downloads/beast/.git
           
-          # Create or update .lock.json with beast entry
           if [ ! -f downloads/.lock.json ]; then
             echo '{}' > downloads/.lock.json
           fi
           
-          # Inject beast entry using PHP
           php -r '
             $lockFile = "downloads/.lock.json";
             $lock = json_decode(file_get_contents($lockFile), true) ?: [];
@@ -136,51 +82,41 @@ jobs:
           '
           
           echo "=== beast staged ==="
-          ls -la downloads/beast/
-          echo "=== lock file ==="
-          cat downloads/.lock.json
+          ls -la downloads/beast/ | head -20
 
-      - name: Debug - verify spc.exe exists
-        shell: pwsh
+      - name: SPC doctor
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}/../static-php-cli
+        run: php bin/spc doctor
+
+      - name: Read PHP extensions and libraries
         run: |
-          $spc = "${{ github.workspace }}/../static-php-cli/bin/spc.exe"
-          Write-Host "Looking for: $spc"
-          if (Test-Path $spc) {
-            Write-Host "✅ spc.exe found"
-            Get-Item $spc | Select-Object FullName, Length
-          } else {
-            Write-Host "❌ spc.exe NOT found"
-            Write-Host "Listing ${{ github.workspace }}/../static-php-cli :"
-            Get-ChildItem "${{ github.workspace }}/../static-php-cli" -Force -ErrorAction SilentlyContinue | Select-Object Name
-            Write-Host "Listing ${{ github.workspace }}/../static-php-cli/bin :"
-            Get-ChildItem "${{ github.workspace }}/../static-php-cli/bin" -Force -ErrorAction SilentlyContinue | Select-Object Name
-          }
+          $extensions = php -r "echo trim(file_get_contents('php-extensions.txt'));"
+          $env:EXTENSIONS = $extensions
+          $extHash = php -r "echo md5(getenv('EXTENSIONS'));"
+          $libraries = php -r "echo trim(file_get_contents('php-libraries.txt'));"
+          Add-Content -Path $env:GITHUB_ENV -Value "PHP_EXTENSIONS=$extensions"
+          Add-Content -Path $env:GITHUB_ENV -Value "PHP_EXT_HASH=$extHash"
+          Add-Content -Path $env:GITHUB_ENV -Value "PHP_LIBS=$libraries"
+
+      - id: cache-spc-downloads
+        uses: actions/cache@v4
+        with:
+          path: ../static-php-cli/downloads
+          key: spc-downloads-${{ env.PHP_EXT_HASH }}
 
       - name: Download PHP extension sources
         if: steps.cache-spc-downloads.outputs.cache-hit != 'true'
-        shell: pwsh
+        working-directory: ${{ github.workspace }}/../static-php-cli
         env:
           SPC_IGNORE_BAD_HASH: "true"
-        run: |
-          $spcDir = "${{ github.workspace }}/../static-php-cli"
-          $spc = "$spcDir/bin/spc.exe"
-          
-          if (-not (Test-Path $spc)) {
-            Write-Host "FATAL: spc.exe not found at $spc"
-            exit 1
-          }
-          
-          Set-Location $spcDir
-          Write-Host "Working dir: $(Get-Location)"
-          & $spc download --with-php=${{ matrix.version }} --for-extensions "${{ env.PHP_EXTENSIONS }}" --prefer-pre-built
-      # SPC 2.8.5 has no Windows zstd builder, but PHP ext/curl/config.w32
-      # requires libzstd.lib. Stage a pre-built copy into buildroot so the
-      # curl extension's config check passes.
+        run: php bin/spc download --with-php=${{ matrix.version }} --for-extensions "${{ env.PHP_EXTENSIONS }}" --prefer-pre-built
+
       - name: Stage libzstd for curl extension
+        working-directory: ${{ github.workspace }}/..
         env:
           ZSTD_VERSION: v1.5.7
         run: |
-          cd ..
           Invoke-WebRequest -Uri "https://github.com/facebook/zstd/releases/download/${env:ZSTD_VERSION}/zstd-${env:ZSTD_VERSION}-win64.zip" -OutFile zstd.zip
           Expand-Archive -Path zstd.zip -DestinationPath .
           New-Item -ItemType Directory -Force -Path "static-php-cli/buildroot/lib", "static-php-cli/buildroot/include" | Out-Null
@@ -188,38 +124,21 @@ jobs:
           Copy-Item "zstd-${env:ZSTD_VERSION}-win64/include/*.h" "static-php-cli/buildroot/include/"
           Remove-Item -Recurse -Force zstd.zip, "zstd-${env:ZSTD_VERSION}-win64"
 
-      # SPC's bundled icu-static-win is ICU 78, whose headers require C++17.
-      # PHP 8.3's ext/intl/config.w32 doesn't pass /std:c++17 to MSVC (8.4+
-      # does), so intl_convertcpp.cpp fails to compile. Extract php-src
-      # manually and patch in /std:c++17 before SPC runs the build.
       - name: Patch PHP 8.3 ext/intl for C++17 (ICU 78 compatibility)
         if: matrix.version == '8.3'
-        shell: pwsh
-        run: |
-          $spcDir = "${{ github.workspace }}/../static-php-cli"
-          $spc = "$spcDir/bin/spc.exe"
-          Set-Location $spcDir
-          & $spc extract php-src
-          $f = 'source/php-src/ext/intl/config.w32'
-          (Get-Content -Path $f -Raw) -replace '"/EHsc /DUNISTR_FROM_CHAR_EXPLICIT', '"/std:c++17 /EHsc /DUNISTR_FROM_CHAR_EXPLICIT' | Set-Content -Path $f -NoNewline
-          
-      - name: Debug - verify beast is recognized
-        shell: pwsh
-        run: |
-          $spcDir = "${{ github.workspace }}/../static-php-cli"
-          $spc = "$spcDir/bin/spc.exe"
-          Set-Location $spcDir
-          & $spc dump-extensions 2>&1 | Select-String beast
-          
-      - name: Build PHP
-        shell: pwsh
+        working-directory: ${{ github.workspace }}/../static-php-cli
         env:
           SPC_IGNORE_BAD_HASH: "true"
         run: |
-          $spcDir = "${{ github.workspace }}/../static-php-cli"
-          $spc = "$spcDir/bin/spc.exe"
-          Set-Location $spcDir
-          & $spc build --build-cli "${{ env.PHP_EXTENSIONS }}" --with-libs="${{ env.PHP_LIBS }}" --debug
+          php bin/spc extract php-src
+          $f = 'source/php-src/ext/intl/config.w32'
+          (Get-Content -Path $f -Raw) -replace '"/EHsc /DUNISTR_FROM_CHAR_EXPLICIT', '"/std:c++17 /EHsc /DUNISTR_FROM_CHAR_EXPLICIT' | Set-Content -Path $f -NoNewline
+
+      - name: Build PHP
+        working-directory: ${{ github.workspace }}/../static-php-cli
+        env:
+          SPC_IGNORE_BAD_HASH: "true"
+        run: php bin/spc build --build-cli "${{ env.PHP_EXTENSIONS }}" --with-libs="${{ env.PHP_LIBS }}" --debug
 
       - name: Get built PHP version
         run: |
@@ -233,75 +152,13 @@ jobs:
       - name: Zip PHP binary, copy metadata
         run: |
           Compress-Archive -Path "../static-php-cli/buildroot/bin/php.exe" -DestinationPath "bin/${{ env.SPC_BUILD_OS }}/${{ matrix.arch }}/php-${{ matrix.version }}.zip" -Force
-          Copy-Item ../static-php-cli/buildroot/license/* license-files/
-          Copy-Item ../static-php-cli/buildroot/build-extensions.json build-meta/build-extensions-${{ env.SPC_BUILD_OS }}.json
-          Copy-Item ../static-php-cli/buildroot/build-libraries.json build-meta/build-libraries-${{ env.SPC_BUILD_OS }}.json
+          Copy-Item ../static-php-cli/buildroot/license/* license-files/ -ErrorAction SilentlyContinue
+          Copy-Item ../static-php-cli/buildroot/build-extensions.json build-meta/build-extensions-${{ env.SPC_BUILD_OS }}.json -ErrorAction SilentlyContinue
+          Copy-Item ../static-php-cli/buildroot/build-libraries.json build-meta/build-libraries-${{ env.SPC_BUILD_OS }}.json -ErrorAction SilentlyContinue
 
-      # Upload the built zip (and a sha256 sidecar) to R2 instead of committing
-      # it to git. Mirrors nativephp-php-bin-mobile/.github/workflows/build.yml:
-      # same `aws s3 cp` tooling, R2_* secrets, endpoint and --cache-control.
-      # Runs under Git Bash (`shell: bash`) so the same script works as on
-      # mac/linux; the windows-2025 runner ships both `aws` and `sha256sum`.
       - name: Upload PHP zip as artifact
         uses: actions/upload-artifact@v4
         with:
           name: php-${{ matrix.version }}-win-x64
           path: bin/win/x64/php-${{ matrix.version }}.zip
           retention-days: 30
-          
-      - name: Upload to R2
-        shell: bash
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-        run: |
-          ZIP="bin/${SPC_BUILD_OS}/${{ matrix.arch }}/php-${{ matrix.version }}.zip"
-          DEST="${R2_PREFIX}desktop/${SPC_BUILD_OS}/${{ matrix.arch }}/php-${{ matrix.version }}.zip"
-
-          # Compute the checksum and upload it as a sidecar first.
-          SHA=$(sha256sum "$ZIP" | awk '{print $1}')
-          echo "$SHA  $(basename "$ZIP")" > "$ZIP.sha256"
-
-          echo "Uploading $ZIP -> ${DEST} (sha256=$SHA)"
-          aws s3 cp "$ZIP" "s3://${R2_BUCKET}/${DEST}" \
-            --endpoint-url "$R2_ENDPOINT" \
-            --cache-control "public, max-age=31536000, immutable"
-
-          aws s3 cp "$ZIP.sha256" "s3://${R2_BUCKET}/${DEST}.sha256" \
-            --endpoint-url "$R2_ENDPOINT" \
-            --content-type "text/plain" \
-            --cache-control "public, max-age=31536000, immutable"
-
-  # Regenerate the branch manifest from everything currently in R2. Runs after
-  # all build jobs; safe because it lists the whole bucket prefix, so it always
-  # reflects every platform/version actually uploaded (mac, linux, win).
-  manifest:
-    needs: build
-    # Run even if some matrix legs failed, so the manifest still reflects the
-    # binaries that DID upload. Skip only on cancellation. The generator lists
-    # the live bucket, so it never references a missing object.
-    if: always() && needs.build.result != 'cancelled'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Generate and upload versions.json
-        shell: bash
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          BUCKET: ${{ env.R2_BUCKET }}
-          BASE_URL: https://bin.nativephp.com
-        run: |
-          chmod +x .github/scripts/generate-versions-json.sh
-          .github/scripts/generate-versions-json.sh > versions.json
-          echo "versions.json:"
-          cat versions.json
-
-          # Manifest LAST, after every binary it references is already in R2.
-          aws s3 cp versions.json "s3://${R2_BUCKET}/${R2_PREFIX}desktop/versions.json" \
-            --endpoint-url "$R2_ENDPOINT" \
-            --content-type "application/json" \
-            --cache-control "no-cache, no-store"
